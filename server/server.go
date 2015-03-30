@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	simple "github.com/wenzuojing/simpleq/broker"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,26 +53,23 @@ func handleConn(conn *net.TCPConn) {
 	for {
 		conn.SetReadDeadline(time.Now().Add(time.Minute * 10))
 
-		cmd, _, err := rw.ReadLine()
+		cmd, args, err := parseRequest(rw)
 
 		if err != nil {
 			panic(err)
 		}
 
-		if len(cmd) == 0 {
-			continue
-		}
-
 		switch string(cmd) {
+
 		case "publish":
-			err := handlePublish(rw)
+			err := handlePublish(args, rw)
 
 			if err != nil {
 				panic(err)
 			}
 			break
 		case "consume":
-			err := handleConsume(rw)
+			err := handleConsume(args, rw)
 			if err != nil {
 				panic(err)
 			}
@@ -89,6 +89,60 @@ func handleConn(conn *net.TCPConn) {
 
 }
 
+func parseRequest(rw *bufio.ReadWriter) (cmd []byte, args [][]byte, err error) {
+
+	header, err := rw.ReadString('\n')
+
+	if err != nil {
+		return
+	}
+
+	header = string(trimRightCRLF([]byte(header)))
+
+	if strings.HasPrefix(header, "*") {
+		var mLen int
+		fmt.Sscanf(header, "*%d", &mLen)
+
+		args = make([][]byte, mLen)
+
+		for i := 0; i < mLen; i++ {
+			lenStr, err := rw.ReadString('\n')
+			if err != nil {
+				return nil, nil, err
+			}
+			var length int
+			fmt.Sscanf(lenStr, "$%d", &length)
+			bb := make([]byte, length)
+			_, err = rw.Read(bb)
+			if err != nil {
+				return nil, nil, err
+			}
+			args = append(args, bb)
+		}
+
+		cmd = args[0]
+		args = args[1:]
+		return
+	} else {
+		err = errors.New("Error protocol")
+		return
+	}
+
+}
+
+func trimRightCRLF(src []byte) []byte {
+	if bytes.HasSuffix(src, []byte("\r\n")) {
+		return bytes.TrimRight(src, "\r\n")
+	}
+
+	if bytes.HasSuffix(src, []byte("\n")) {
+		return bytes.TrimRight(src, "\n")
+	}
+
+	return src
+
+}
+
 func writeBytes(writer io.Writer, data []byte) error {
 	_, err := writer.Write(data)
 	if err != nil {
@@ -97,42 +151,24 @@ func writeBytes(writer io.Writer, data []byte) error {
 	return nil
 }
 
-func readBytes(reader io.Reader, len int) ([]byte, error) {
-	buf := make([]byte, len)
-	_, err := reader.Read(buf)
-	if err != nil {
-		return nil, err
+func handlePublish(args [][]byte, rw *bufio.ReadWriter) error {
+
+	if len(args) != 2 {
+		return errors.New("Bad parameter.")
 	}
-	return buf, nil
-}
 
-func handlePublish(rw *bufio.ReadWriter) error {
+	topic := args[0]
+	msg := args[1]
 
-	topic, _, err := rw.ReadLine()
+	err := broker.Write([]byte(topic), msg)
 
 	if err != nil {
 		return err
 	}
 
-	mLen, _, err := rw.ReadLine()
-	if err != nil {
-		return err
-	}
-
-	msgLen, err := strconv.Atoi(string(mLen))
-	msg, err := readBytes(rw, msgLen)
+	_, err = rw.Write([]byte("+ok\r\n"))
 
 	if err != nil {
-		return err
-	}
-
-	err = broker.Write([]byte(topic), msg)
-
-	if err != nil {
-		return err
-	}
-
-	if err := writeBytes(rw, []byte("ok\n")); err != nil {
 		return err
 	}
 
@@ -141,39 +177,35 @@ func handlePublish(rw *bufio.ReadWriter) error {
 
 }
 
-func handleConsume(rw *bufio.ReadWriter) error {
+func handleConsume(args [][]byte, rw *bufio.ReadWriter) error {
 
-	topic, _, err := rw.ReadLine()
+	if len(args) != 3 {
+		return errors.New("Bad parameter.")
+	}
 
+	topic := args[0]
+	group := args[1]
+	size, _ := strconv.Atoi(string(args[2]))
+
+	msgs, err := broker.Read(topic, group, size)
 	if err != nil {
 		return err
 	}
-	group, _, err := rw.ReadLine()
+
+	var buffer bytes.Buffer
+
+	buffer.Write([]byte(fmt.Sprintf("*%d\r\n", len(msgs))))
+
+	for _, msg := range msgs {
+
+		buffer.Write([]byte(fmt.Sprintf("$%d\r\n", len(msg))))
+		buffer.Write(msg)
+
+	}
+	_, err = rw.Write(buffer.Bytes())
 
 	if err != nil {
 		return err
-	}
-
-	msgs, err := broker.Read(topic, group, 1)
-
-	if len(msgs) == 0 {
-		if err := writeBytes(rw, []byte("nil\n")); err != nil {
-			return err
-		}
-
-	} else {
-		if err := writeBytes(rw, []byte("ok\n")); err != nil {
-			return err
-		}
-
-		if err := writeBytes(rw, []byte(strconv.Itoa(len(msgs[0]))+"\n")); err != nil {
-			return err
-		}
-
-		if err := writeBytes(rw, msgs[0]); err != nil {
-			return err
-		}
-
 	}
 	rw.Flush()
 	return nil
