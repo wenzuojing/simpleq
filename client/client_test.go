@@ -36,7 +36,6 @@ func TestPublish2(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-
 	}
 
 	t.Log("Completed")

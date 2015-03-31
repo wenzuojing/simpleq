@@ -5,7 +5,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	simple "github.com/wenzuojing/simpleq/broker"
+	"github.com/wenzuojing/simpleq/broker"
+	"github.com/wenzuojing/simpleq/config"
 	"io"
 	"log"
 	"net"
@@ -14,32 +15,72 @@ import (
 	"time"
 )
 
-var broker = simple.NewBroker("/data/simpleq")
+type brokerService struct {
+	broker *broker.Broker
+}
 
-func StartServer(host string, port int) error {
-	runtime.GOMAXPROCS(runtime.NumCPU())
+func (bs *brokerService) handlePublish(args [][]byte, rw *bufio.ReadWriter) error {
 
-	addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%d", host, port))
+	if len(args) != 2 {
+		return errors.New("Bad parameter.")
+	}
+
+	topic := args[0]
+	msg := args[1]
+
+	err := bs.broker.Write(topic, msg)
+
 	if err != nil {
 		return err
 	}
-	listener, err := net.ListenTCP("tcp", addr)
+
+	_, err = rw.Write([]byte("+ok\r\n"))
+
 	if err != nil {
 		return err
 	}
-	go func() {
-		for {
-			conn, err := listener.AcceptTCP()
-			if err != nil {
-				log.Fatalf("[error]%v", err)
-			}
-			go handleConn(conn)
-		}
-	}()
+
+	rw.Flush()
+	return nil
+
+}
+
+func (bs *brokerService) handleConsume(args [][]byte, rw *bufio.ReadWriter) error {
+
+	if len(args) != 3 {
+		return errors.New("Bad parameter.")
+	}
+
+	topic := args[0]
+	group := args[1]
+	size, _ := strconv.Atoi(string(args[2]))
+
+	msgs, err := bs.broker.Read(topic, group, size)
+	if err != nil {
+		return err
+	}
+
+	var buffer bytes.Buffer
+
+	buffer.Write([]byte(fmt.Sprintf("*%d\r\n", len(msgs))))
+
+	for _, msg := range msgs {
+
+		buffer.Write([]byte(fmt.Sprintf("$%d\r\n", len(msg))))
+		buffer.Write(msg)
+		buffer.Write([]byte("\r\n"))
+
+	}
+	_, err = rw.Write(buffer.Bytes())
+
+	if err != nil {
+		return err
+	}
+	rw.Flush()
 	return nil
 }
 
-func handleConn(conn *net.TCPConn) {
+func (c *brokerService) handleConn(conn *net.TCPConn) {
 	defer func() {
 		if x := recover(); x != nil {
 			log.Printf("[error] %v\r\n", x)
@@ -62,7 +103,7 @@ func handleConn(conn *net.TCPConn) {
 
 		case "publish":
 
-			err := handlePublish(args, rw)
+			err := c.handlePublish(args, rw)
 
 			if err != nil {
 				panic(err)
@@ -70,7 +111,7 @@ func handleConn(conn *net.TCPConn) {
 
 			break
 		case "consume":
-			err := handleConsume(args, rw)
+			err := c.handleConsume(args, rw)
 			if err != nil {
 				panic(err)
 			}
@@ -88,6 +129,34 @@ func handleConn(conn *net.TCPConn) {
 
 	}
 
+}
+
+func StartServer(config *config.SimpleqConfig) error {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	host := config.StringDefault("server.host", "0.0.0.0.0")
+	port := config.IntDefault("server.port", 9090)
+
+	dataDir := config.StringDefault("data.dir", "/tmp/simpleq")
+	brokerService := &brokerService{broker.NewBroker(dataDir)}
+
+	addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return err
+	}
+	listener, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return err
+	}
+	go func() {
+		for {
+			conn, err := listener.AcceptTCP()
+			if err != nil {
+				log.Fatalf("[error]%v", err)
+			}
+			go brokerService.handleConn(conn)
+		}
+	}()
+	return nil
 }
 
 func parseRequest(rw *bufio.ReadWriter) (cmd []byte, args [][]byte, err error) {
@@ -160,66 +229,4 @@ func writeBytes(writer io.Writer, data []byte) error {
 		return err
 	}
 	return nil
-}
-
-func handlePublish(args [][]byte, rw *bufio.ReadWriter) error {
-
-	if len(args) != 2 {
-		return errors.New("Bad parameter.")
-	}
-
-	topic := args[0]
-	msg := args[1]
-
-	err := broker.Write(topic, msg)
-
-	if err != nil {
-		return err
-	}
-
-	_, err = rw.Write([]byte("+ok\r\n"))
-
-	if err != nil {
-		return err
-	}
-
-	rw.Flush()
-	return nil
-
-}
-
-func handleConsume(args [][]byte, rw *bufio.ReadWriter) error {
-
-	if len(args) != 3 {
-		return errors.New("Bad parameter.")
-	}
-
-	topic := args[0]
-	group := args[1]
-	size, _ := strconv.Atoi(string(args[2]))
-
-	msgs, err := broker.Read(topic, group, size)
-	if err != nil {
-		return err
-	}
-
-	var buffer bytes.Buffer
-
-	buffer.Write([]byte(fmt.Sprintf("*%d\r\n", len(msgs))))
-
-	for _, msg := range msgs {
-
-		buffer.Write([]byte(fmt.Sprintf("$%d\r\n", len(msg))))
-		buffer.Write(msg)
-		buffer.Write([]byte("\r\n"))
-
-	}
-	_, err = rw.Write(buffer.Bytes())
-
-	if err != nil {
-		return err
-	}
-	rw.Flush()
-	return nil
-
 }
