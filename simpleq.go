@@ -13,10 +13,11 @@ var port int
 
 func main() {
 
-	flag.StringVar(&host, "host", "localhost", "-host localhost")
+	flag.StringVar(&host, "host", "0.0.0.0", "-host 0.0.0.0")
 	flag.IntVar(&port, "port", 9090, "-port 9090")
 	flag.Parse()
 	log.SetPrefix("[simpleq]")
+	log.SetFlags(log.Lshortfile)
 
 	go func() {
 		err := server.StartServer(host, port)

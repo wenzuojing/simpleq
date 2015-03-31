@@ -11,11 +11,10 @@ import (
 	"net"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 )
 
-var broker = simple.NewBroker("/home/wens/data")
+var broker = simple.NewBroker("/data/simpleq")
 
 func StartServer(host string, port int) error {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -43,7 +42,7 @@ func StartServer(host string, port int) error {
 func handleConn(conn *net.TCPConn) {
 	defer func() {
 		if x := recover(); x != nil {
-			log.Printf("[error]%v\n", x)
+			log.Printf("[error] %v\r\n", x)
 		}
 	}()
 	defer conn.Close()
@@ -62,11 +61,13 @@ func handleConn(conn *net.TCPConn) {
 		switch string(cmd) {
 
 		case "publish":
+
 			err := handlePublish(args, rw)
 
 			if err != nil {
 				panic(err)
 			}
+
 			break
 		case "consume":
 			err := handleConsume(args, rw)
@@ -91,33 +92,43 @@ func handleConn(conn *net.TCPConn) {
 
 func parseRequest(rw *bufio.ReadWriter) (cmd []byte, args [][]byte, err error) {
 
-	header, err := rw.ReadString('\n')
-
+	header, err := rw.ReadBytes('\n')
 	if err != nil {
 		return
 	}
 
-	header = string(trimRightCRLF([]byte(header)))
+	header = trimRightCRLF(header)
 
-	if strings.HasPrefix(header, "*") {
-		var mLen int
-		fmt.Sscanf(header, "*%d", &mLen)
+	if bytes.HasPrefix(header, []byte("*")) {
 
-		args = make([][]byte, mLen)
+		mLen, _ := strconv.Atoi(string(header[1]))
+		args = make([][]byte, 0, mLen/2)
 
 		for i := 0; i < mLen; i++ {
-			lenStr, err := rw.ReadString('\n')
+			lenBytes, err := rw.ReadBytes('\n')
+
 			if err != nil {
 				return nil, nil, err
 			}
-			var length int
-			fmt.Sscanf(lenStr, "$%d", &length)
+
+			lenBytes = trimRightCRLF(lenBytes)
+			length, _ := strconv.Atoi(string(lenBytes[1:]))
+
 			bb := make([]byte, length)
 			_, err = rw.Read(bb)
+
 			if err != nil {
 				return nil, nil, err
 			}
+
+			bb = trimRightCRLF(bb)
 			args = append(args, bb)
+
+			_, err = rw.ReadBytes('\n')
+
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 
 		cmd = args[0]
@@ -160,7 +171,7 @@ func handlePublish(args [][]byte, rw *bufio.ReadWriter) error {
 	topic := args[0]
 	msg := args[1]
 
-	err := broker.Write([]byte(topic), msg)
+	err := broker.Write(topic, msg)
 
 	if err != nil {
 		return err
@@ -200,6 +211,7 @@ func handleConsume(args [][]byte, rw *bufio.ReadWriter) error {
 
 		buffer.Write([]byte(fmt.Sprintf("$%d\r\n", len(msg))))
 		buffer.Write(msg)
+		buffer.Write([]byte("\r\n"))
 
 	}
 	_, err = rw.Write(buffer.Bytes())

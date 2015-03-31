@@ -5,8 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
-	"strings"
+	"strconv"
 )
 
 type Client struct {
@@ -31,7 +30,7 @@ func (client *Client) Publish(topic, msg []byte) error {
 		return err
 	}
 
-	bb := commandBytes("publish", topic)
+	bb := commandBytes("publish", topic, msg)
 
 	_, err = conn.rw.Write(bb)
 
@@ -39,7 +38,7 @@ func (client *Client) Publish(topic, msg []byte) error {
 		return err
 	}
 	conn.rw.Flush()
-	result, err := readResponse(conn.rw)
+	_, err = readResponse(conn.rw)
 	if err != nil {
 		return err
 	}
@@ -85,52 +84,63 @@ func commandBytes(cmd string, args ...[]byte) []byte {
 
 func readResponse(rw *bufio.ReadWriter) (interface{}, error) {
 
-	header, err := rw.ReadString('\n')
+	header, err := rw.ReadBytes('\n')
 
 	if err != nil {
 		return nil, err
 	}
 
-	header = string(trimRightCRLF([]byte(header)))
+	header = trimRightCRLF(header)
 
-	if strings.HasPrefix(header, "+") {
+	if bytes.HasPrefix(header, []byte("+")) {
 		return header[1:], nil
 	}
 
-	if strings.HasPrefix(header, "-") {
-		return nil, errors.New(header[1:])
+	if bytes.HasPrefix(header, []byte("-")) {
+		return nil, errors.New(string(header[1:]))
 	}
 
-	if strings.HasPrefix(header, "$") {
-		var length int
-		fmt.Sscanf(header, "$%d", &length)
+	if bytes.HasPrefix(header, []byte("$")) {
+		length, _ := strconv.Atoi(string(header[1]))
+
 		bb := make([]byte, length)
 		_, err := rw.Read(bb)
 		if err != nil {
 			return nil, err
 		}
+
+		_, err = rw.ReadBytes('\n')
+
+		if err != nil {
+			return nil, err
+		}
+
 		return bb, nil
 	}
 
-	if strings.HasPrefix(header, "*") {
-		var mLen int
-		fmt.Sscanf(header, "*%d", &mLen)
+	if bytes.HasPrefix(header, []byte("*")) {
+		mLen, _ := strconv.Atoi(string(header[1:]))
 
-		res := make([][]byte, mLen)
-
+		res := make([][]byte, 0, mLen/2)
 		for i := 0; i < mLen; i++ {
-			lenStr, err := rw.ReadString('\n')
+			lenBytes, err := rw.ReadBytes('\n')
 			if err != nil {
 				return nil, err
 			}
-			var length int
-			fmt.Sscanf(lenStr, "$%d", &length)
+			lenBytes = trimRightCRLF(lenBytes)
+			length, _ := strconv.Atoi(string(lenBytes[1:]))
 			bb := make([]byte, length)
 			_, err = rw.Read(bb)
 			if err != nil {
 				return nil, err
 			}
 			res = append(res, bb)
+
+			_, err = rw.ReadBytes('\n')
+
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		return res, nil
