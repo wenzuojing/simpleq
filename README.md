@@ -7,6 +7,7 @@ golang实现的消息队列服务，支持消费主题(topic)以及消费者分�
 
 ### 安装
 
+需要go1.2或以上版本
 ```sh
 go get github.com/wenzuojing/simpleq
 cd $GOPATH/src/github.com/wenzuojing/simpleq
