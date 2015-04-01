@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
-	"log"
 	"sync"
 )
 
@@ -77,7 +76,6 @@ func (store *MessageStore) Read(group []byte, size int) ([][]byte, error) {
 		result = append(result, value)
 	}
 	newPosition := position + uint64(len(result))
-	log.Printf("%s pull from %d to %d", group, position, newPosition)
 	err = store.meta.SetReadPosition(group, newPosition)
 	if err != nil {
 		return nil, err

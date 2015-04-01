@@ -11,15 +11,13 @@ import (
 
 func main() {
 
-	log.Println(os.Args[0])
+	configPath := flag.String("conf", "/home/wens/go/src/github.com/wenzuojing/simpleq/simpleq.conf", "-conf simpleq.conf")
 
-	var configPath string
-	flag.StringVar(&configPath, "conf", "simpleq.conf", "-conf simpleq.conf")
 	flag.Parse()
 	log.SetPrefix("[simpleq]")
 	log.SetFlags(log.Lshortfile)
 
-	config, err := config.LoadConfig(configPath)
+	config, err := config.LoadConfig(*configPath)
 
 	if err != nil {
 		log.Fatalf("Read config fail. %v", err)

@@ -1,11 +1,9 @@
 #! /bin/sh
 
-buildoutput=.build
+currdir=`pwd`
 
-if [ ! -d $buildoutput ]; then
-    mkdir simpleq
-else
-    rm -rf $buildoutput
-fi
+go build -o $currdir/simpleq $currdir/simpleq.go
 
-mv simpleq.conf ./$buildoutput
+
+
+
